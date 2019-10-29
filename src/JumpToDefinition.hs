@@ -2,6 +2,7 @@
 
 module JumpToDefinition (definitionRequestToResponse) where
 
+import Control.Monad (liftM)
 import Data.Int
 import Lens.Micro
 import Lens.Micro.Extras (view)
@@ -15,6 +16,8 @@ import Data.ProtoLens (decodeMessage)
 import System.FilePath.Find as Find
 import System.Directory (getCurrentDirectory)
 import System.FilePath.Posix (makeRelative)
+import System.Process (callProcess)
+import Control.Exception (catch, SomeException)
 
 import Proto.Semanticdb as S
 import Proto.Semanticdb_Fields (documents, occurrences, role, symbol, startLine, endLine, startCharacter, endCharacter, range, uri)
@@ -24,7 +27,9 @@ import LSP
 
 definitionRequestToResponse :: DefinitionRequest -> IO DefinitionResponse
 definitionRequestToResponse definitionRequest = do
-  maybeLocation <- findLocationFromRequest definitionRequest
+  maybeLocation <- catch (findLocationFromRequest definitionRequest) (\e -> do
+    let _ = e::SomeException
+    return Nothing)
   return $ definitionResponse definitionRequest maybeLocation
 
 findLocationFromRequest :: DefinitionRequest -> IO (Maybe L.Location)
@@ -38,7 +43,7 @@ findLocationFromRequest definitionRequest = do
     -- find the symbol in the `TextDocument` at the given `Position`
     Just textDocument -> case occurrenceAtPosition pos textDocument of
       Nothing -> return $ Nothing
-      Just symbolOccurence ->
+      Just symbolOccurence -> do
         case symbolOccurence^.role of
           S.SymbolOccurrence'UNKNOWN_ROLE -> return Nothing
           -- the symbol is already the definition itself
@@ -51,12 +56,21 @@ findLocationFromRequest definitionRequest = do
               -- No, we have to search in all project files for the definition.
               maybeResult <- defnitionInProjectFiles symbolOccurence
               case maybeResult of
-                Nothing -> return Nothing
                 Just symbolWithTextDocument -> do
                   let definitionSymbol = fst symbolWithTextDocument
                   let definitionTexDocument = snd symbolWithTextDocument
                   definitionUri <- uriFromTextDocument definitionTexDocument
                   return $ Just $ lspLocation definitionUri definitionSymbol
+                Nothing -> do
+                  maybeDefInDeps <- defnitionInDependencies symbolOccurence
+                  case maybeDefInDeps of
+                    Nothing -> return Nothing
+                    Just symbolWithTextDocument -> do
+                      let definitionSymbol = fst symbolWithTextDocument
+                      let definitionTexDocument = snd symbolWithTextDocument
+                      definitionUri <- uriFromTextDocument definitionTexDocument
+                      return $ Just $ lspLocation definitionUri definitionSymbol
+
 
 
 textDocumentWthUri :: Uri -> IO (Maybe S.TextDocument)
@@ -104,6 +118,20 @@ defnitionInProjectFiles symbolOccurence = do
         Nothing -> searchOccurence symbol tail
         Just res -> return $ Just res
 
+defnitionInDependencies :: S.SymbolOccurrence -> IO(Maybe (S.SymbolOccurrence, S.TextDocument))
+defnitionInDependencies symbolOccurence = do
+  let depFilePath = dependencyUriFromSymbolOccurence symbolOccurence
+  currentDirectory <- getCurrentDirectory
+  let fullPath = (currentDirectory ++ "/" ++depFilePath)
+  currentDirectory <- getCurrentDirectory
+  metacDone <-  callProcess "metac" ["-P:semanticdb:targetroot:.woods/deps/", fullPath]
+  findOccurenceFromFilePath (currentDirectory ++"/.woods/deps/META-INF/semanticdb/" ++ depFilePath ++ ".semanticdb") symbolOccurence
+
+
+dependencyUriFromSymbolOccurence :: S.SymbolOccurrence -> FilePath
+dependencyUriFromSymbolOccurence symbolOccurence = (".woods/deps/" ++ List.takeWhile (\char -> not (char == '.' || char == '#')) (T.unpack $ (symbolOccurence^.symbol)) ++ ".scala")
+
+
 
 findOccurenceFromFilePath :: FilePath -> S.SymbolOccurrence -> IO(Maybe (S.SymbolOccurrence, S.TextDocument))
 findOccurenceFromFilePath filePath symbol = do
@@ -120,7 +148,7 @@ occurenceInTextDocuments symbol (textDocument:tail) =
 
 
 listAllfiles :: IO([FilePath])
-listAllfiles = getCurrentDirectory >>= Find.find always (extension ==? ".semanticdb")
+listAllfiles = getCurrentDirectory >>= Find.find always ((directory /~? ".woods") &&? (extension ==? ".semanticdb"))
 
 
 uriFromTextDocument :: S.TextDocument -> IO (Uri)

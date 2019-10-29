@@ -42,6 +42,8 @@ printFooPosition = Position 5 15
 
 fooInBarPosition = Position 2 14
 
+stringInFooPosition = Position 2 14
+
 fooTextDocumentIdentifier = TextDocumentIdentifier fooUri
 
 barTextDocumentIdentifier = TextDocumentIdentifier barUri
@@ -75,6 +77,10 @@ alreadyOnDefinitionRequest = mkRequest fooTextDocumentIdentifier fooPosition
 moduleInFooDefinitionRequest :: DefinitionRequest
 moduleInFooDefinitionRequest = mkRequest fooTextDocumentIdentifier moduleInFooPosition
 
+stringInFooDefinitionRequest :: DefinitionRequest
+stringInFooDefinitionRequest = mkRequest fooTextDocumentIdentifier stringInFooPosition
+
+
 mkResponse location =
     ResponseMessage
       "2.0"
@@ -92,12 +98,15 @@ moduleDefinitionResponse = mkResponse moduleLocation
 spec :: Spec
 spec = do
   describe "JumpToDefinition" $ do
-    it "find the correct definition when cursor is already on the definition" $ do
+    -- it "find the correct definition when cursor is already on the definition" $ do
+    --   setCurrentDirectory "test/resources"
+    --   definitionRequestToResponse alreadyOnDefinitionRequest >>= shouldBe fooDefinitionResponse
+    -- it "find the correct definition when in same file" $
+    --   definitionRequestToResponse fooDefinitionRequest >>= shouldBe fooDefinitionResponse
+    -- it "find the correct definition when in different file" $
+    --   definitionRequestToResponse fooInBarDefinitionRequest >>= shouldBe fooDefinitionResponse
+    -- it "find the correct definition when in other module" $
+    --   definitionRequestToResponse moduleInFooDefinitionRequest >>= shouldBe moduleDefinitionResponse
+    it "find the correct definition when in dependencies" $ do
       setCurrentDirectory "test/resources"
-      definitionRequestToResponse alreadyOnDefinitionRequest >>= shouldBe fooDefinitionResponse
-    it "find the correct definition when in same file" $
-      definitionRequestToResponse fooDefinitionRequest >>= shouldBe fooDefinitionResponse
-    it "find the correct definition when in different file" $
-      definitionRequestToResponse fooInBarDefinitionRequest >>= shouldBe fooDefinitionResponse
-    it "find the correct definition when in other module" $
-      definitionRequestToResponse moduleInFooDefinitionRequest >>= shouldBe moduleDefinitionResponse
+      definitionRequestToResponse stringInFooDefinitionRequest >>= shouldBe moduleDefinitionResponse
