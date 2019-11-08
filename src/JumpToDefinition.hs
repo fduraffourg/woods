@@ -19,6 +19,7 @@ import System.FilePath.Posix (makeRelative)
 import Proto.Semanticdb as S
 import Proto.Semanticdb_Fields (documents, occurrences, role, symbol, startLine, endLine, startCharacter, endCharacter, range, uri)
 import LSP
+import Helpers
 
 --TODO: use Monad transformer
 
@@ -60,47 +61,6 @@ findLocationFromRequest definitionRequest = do
                     Just symbolWithTextDocument -> responseFromSymbolWithTextDocument  symbolWithTextDocument
 
 
-responseFromSymbolWithTextDocument :: (S.SymbolOccurrence, S.TextDocument) -> IO (Maybe L.Location)
-responseFromSymbolWithTextDocument symbolWithTextDocument = do
-  let definitionSymbol = fst symbolWithTextDocument
-  let definitionTexDocument = snd symbolWithTextDocument
-  definitionUri <- uriFromTextDocument definitionTexDocument
-  return $ Just $ lspLocation definitionUri definitionSymbol
-
-
-textDocumentWthUri :: Uri -> IO (Maybe S.TextDocument)
-textDocumentWthUri uri = do
-  currentDirectory <- getCurrentDirectory
-  let maybeFilePath = fmap (makeRelative currentDirectory) (uriToFilePath uri)
-  case maybeFilePath of
-    Nothing -> return Nothing
-    Just filePath -> do
-      allFiles <- listAllfiles
-      inner filePath allFiles
-      where
-        inner :: FilePath -> [FilePath] -> IO (Maybe S.TextDocument)
-        inner filePath files =
-          case files of
-            [] -> return Nothing
-            x:tail -> do
-              maybeRes <- textDocumentFromUriAndSemanticdbFile filePath x
-              case maybeRes of
-                Nothing -> inner filePath tail
-                Just res -> return $ Just res
-
-occurrenceAtPosition :: Position -> S.TextDocument -> Maybe S.SymbolOccurrence
-occurrenceAtPosition position textDocument = List.find (\symbol -> isPosititionInRange position (symbol^.range)) (textDocument^.occurrences)
-
-
-definitionInTexDocument :: S.SymbolOccurrence -> S.TextDocument -> Maybe S.SymbolOccurrence
-definitionInTexDocument symbolOccurence textDocument =
-  case (symbolOccurence^.role) of
-    S.SymbolOccurrence'UNKNOWN_ROLE -> Nothing
-    S.SymbolOccurrence'DEFINITION -> Just symbolOccurence
-    S.SymbolOccurrence'REFERENCE ->
-      List.find (\symb -> symb^.symbol == symbolOccurence^.symbol && symb^.role == S.SymbolOccurrence'DEFINITION) (textDocument^.occurrences)
-
-
 defnitionWithOptimisticSearch :: S.SymbolOccurrence -> IO(Maybe (S.SymbolOccurrence, S.TextDocument))
 defnitionWithOptimisticSearch symbolOccurence = do
   findFile (extractFileName symbolOccurence) >>= searchOccurence symbolOccurence
@@ -118,93 +78,3 @@ defnitionWithOptimisticSearch symbolOccurence = do
 defnitionInProjectFiles :: S.SymbolOccurrence -> IO(Maybe (S.SymbolOccurrence, S.TextDocument))
 defnitionInProjectFiles symbolOccurence = do
   listAllfiles >>= searchOccurence symbolOccurence
-
-
-searchOccurence :: S.SymbolOccurrence -> [FilePath]  -> IO(Maybe (S.SymbolOccurrence, S.TextDocument))
-searchOccurence symbol [] = return Nothing
-searchOccurence symbol (filePath:tail) = do
-  maybeRes <- findOccurenceFromFilePath filePath symbol
-  case maybeRes of
-    Nothing -> searchOccurence symbol tail
-    Just res -> return $ Just res
-
-
-findOccurenceFromFilePath :: FilePath -> S.SymbolOccurrence -> IO(Maybe (S.SymbolOccurrence, S.TextDocument))
-findOccurenceFromFilePath filePath symbol = do
-  maybeTextDocuments <- textDocumentsFromFilePath filePath
-  return $ maybeTextDocuments >>= occurenceInTextDocuments symbol . view documents
-
-
-occurenceInTextDocuments :: S.SymbolOccurrence -> [S.TextDocument] -> Maybe (S.SymbolOccurrence, S.TextDocument)
-occurenceInTextDocuments _ [] = Nothing
-occurenceInTextDocuments symbol (textDocument:tail) =
-  case definitionInTexDocument symbol textDocument of
-    Nothing -> occurenceInTextDocuments symbol tail
-    Just res -> Just $ (res, textDocument)
-
-
-listAllfiles :: IO([FilePath])
-listAllfiles = getCurrentDirectory >>= Find.find always (extension ==? ".semanticdb")
-
-
-uriFromTextDocument :: S.TextDocument -> IO (Uri)
-uriFromTextDocument textDocument = do
-  currentDirectory  <- getCurrentDirectory
-  return $ Uri (T.pack( ("file://" ++ currentDirectory ++ "/" ++ (T.unpack $ textDocument^.uri))))
-
-
-semanticdbRangeToLSPRange :: S.Range -> L.Range
-semanticdbRangeToLSPRange sRange =
-  let
-    startPosition = L.Position (int32ToInt (sRange^.startLine)) (int32ToInt (sRange^.startCharacter))
-    endPosition = L.Position (int32ToInt (sRange^.endLine)) (int32ToInt (sRange^.endCharacter))
-  in Range startPosition endPosition
-
-
-
-lspLocation :: Uri -> S.SymbolOccurrence -> L.Location
-lspLocation uri symbolOccurence =
-  L.Location
-    uri
-    (semanticdbRangeToLSPRange (symbolOccurence^.range))
-
-
-textDocumentsFromFilePath :: FilePath -> IO (Maybe S.TextDocuments)
-textDocumentsFromFilePath filePath = do
-  message <- BS.readFile filePath
-  return $ case decodeMessage message of
-    Left e -> Nothing
-    Right msg -> Just msg
-
-
-decodeTextDocuments :: BS.ByteString -> Maybe S.TextDocuments
-decodeTextDocuments message =
-  case decodeMessage message of
-    Left e -> Nothing
-    Right msg -> Just msg
-
-
-textDocumentFromUriAndSemanticdbFile :: FilePath -> FilePath -> IO(Maybe S.TextDocument)
-textDocumentFromUriAndSemanticdbFile uri semanticdbFile = do
-  message <- BS.readFile semanticdbFile
-  return $ decodeTextDocuments message >>=  textDocumentWithUri uri
-
-
-isSameUri :: FilePath -> S.TextDocument -> Bool
-isSameUri filePath textDocument =  (T.unpack $ textDocument^.uri) == filePath
-
-
-textDocumentWithUri :: FilePath -> S.TextDocuments -> Maybe S.TextDocument
-textDocumentWithUri uri textDocuments = List.find (isSameUri uri) $ textDocuments ^.documents
-
-
-isPosititionInRange :: Position -> S.Range -> Bool
-isPosititionInRange position range =
-     _line position >= int32ToInt  (range^.startLine)
-  && _line position <= int32ToInt  (range^.endLine)
-  && _character position >= int32ToInt  (range^.startCharacter)
-  && _character position <= int32ToInt  (range^.endCharacter)
-
-
-int32ToInt :: Int32 -> Int
-int32ToInt int32 = fromIntegral int32 :: Int

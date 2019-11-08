@@ -33,8 +33,10 @@ library
   exposed-modules:
        JSONRPC
      , LSP
+     , Helpers
      , Sbt
      , JumpToDefinition
+     , FindReferences
      , Proto.Semanticdb
      , Proto.Semanticdb_Fields
   autogen-modules: Proto.Semanticdb, Proto.Semanticdb_Fields
